@@ -9,16 +9,38 @@ const Evidence = require('../models/Evidence');
 // Multer storage config
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const uploadPath = path.join(__dirname, '../../sample-data/uploads');
+    const uploadPath = path.join(__dirname, '../../sample-data');
     if (!fs.existsSync(uploadPath)) fs.mkdirSync(uploadPath);
     cb(null, uploadPath);
   },
   filename: (req, file, cb) => {
-    cb(null, Date.now() + '-' + file.originalname);
+    // Save with original name so mapper can find it
+    if (file.fieldname === 'evidence') {
+      cb(null, 'evidence_artifacts.csv');
+    } else if (file.fieldname === 'policy') {
+      cb(null, 'policy_documents.txt');
+    } else {
+      cb(null, file.originalname);
+    }
   }
 });
 
 const upload = multer({ storage });
+
+// Upload both policy and evidence files
+router.post('/upload-files', upload.fields([
+  { name: 'policy', maxCount: 1 },
+  { name: 'evidence', maxCount: 1 }
+]), async (req, res) => {
+  try {
+    if (!req.files?.policy || !req.files?.evidence) {
+      return res.status(400).json({ success: false, message: 'Both policy and evidence files are required' });
+    }
+    res.json({ success: true, message: 'Files uploaded successfully' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
 
 // Get all evidence records
 router.get('/', async (req, res) => {
@@ -50,7 +72,7 @@ router.get('/reset', async (req, res) => {
   }
 });
 
-// Upload evidence file with tags
+// Upload single evidence file with tags
 router.post('/upload', upload.single('file'), async (req, res) => {
   try {
     const { policy, requirement, framework } = req.body;
@@ -76,7 +98,6 @@ router.post('/upload', upload.single('file'), async (req, res) => {
     });
 
     await evidenceRecord.save();
-
     res.json({ success: true, data: evidenceRecord, message: 'Evidence uploaded successfully' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
