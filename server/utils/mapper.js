@@ -57,10 +57,19 @@ function determineStatus(evidence) {
   const confidence = parseFloat(evidence.confidence_score);
   const freshness = parseInt(evidence.freshness_days);
 
-  if (marker === 'STALE_EVIDENCE' || freshness > 90) return 'stale';
+  // Check anomaly markers first
   if (marker === 'COMPLIANCE_GAP' || marker === 'MISSING_DOCUMENTATION') return 'gap';
+  if (marker === 'STALE_EVIDENCE') return 'stale';
+  
+  // Check confidence
   if (confidence < 0.6) return 'low_confidence';
+  
+  // Approved with good confidence = compliant regardless of freshness
   if (evidence.status === 'Approved' && confidence >= 0.7) return 'compliant';
+  if (evidence.status === 'Pending_Review' && confidence >= 0.8) return 'compliant';
+  
+  // Now check freshness
+  if (freshness > 90) return 'stale';
   
   return 'gap';
 }
@@ -71,11 +80,13 @@ async function mapEvidenceToRequirements() {
   const evidenceList = await parseEvidence();
 
   const mapped = requirements.map(req => {
-    const matchingEvidence = evidenceList.filter(e => 
-      e.framework && req.compliance_mapping.some(c => 
-        c.includes(e.framework)
-      )
-    );
+    const matchingEvidence = evidenceList.filter(e => {
+      if (!e.framework) return false;
+      const fw = e.framework.toLowerCase().trim();
+      return req.compliance_mapping.some(c =>
+        c.toLowerCase().includes(fw) || fw.includes(c.toLowerCase().trim())
+      );
+    });
 
     const bestEvidence = matchingEvidence[0] || null;
     const status = determineStatus(bestEvidence);
