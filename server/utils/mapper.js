@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const csv = require('csv-parser');
+const Evidence = require('../models/Evidence');
 
 // Read and extract requirements from policy text file
 function parsePolicyDocument() {
@@ -57,18 +58,11 @@ function determineStatus(evidence) {
   const confidence = parseFloat(evidence.confidence_score);
   const freshness = parseInt(evidence.freshness_days);
 
-  // Check anomaly markers first
   if (marker === 'COMPLIANCE_GAP' || marker === 'MISSING_DOCUMENTATION') return 'gap';
   if (marker === 'STALE_EVIDENCE') return 'stale';
-  
-  // Check confidence
   if (confidence < 0.6) return 'low_confidence';
-  
-  // Approved with good confidence = compliant regardless of freshness
   if (evidence.status === 'Approved' && confidence >= 0.7) return 'compliant';
   if (evidence.status === 'Pending_Review' && confidence >= 0.8) return 'compliant';
-  
-  // Now check freshness
   if (freshness > 90) return 'stale';
   
   return 'gap';
@@ -77,10 +71,47 @@ function determineStatus(evidence) {
 // Link requirements to evidence and return final result
 async function mapEvidenceToRequirements() {
   const requirements = parsePolicyDocument();
-  const evidenceList = await parseEvidence();
+  const csvEvidence = await parseEvidence();
+
+  // Fetch manually uploaded evidence from MongoDB
+  const dbEvidence = await Evidence.find({}).lean();
+
+  // Convert MongoDB evidence to same format as CSV
+  const dbEvidenceFormatted = dbEvidence.map(e => ({
+    evidence_id: e.evidence_id,
+    requirement_id: e.requirement_id,
+    framework: e.framework,
+    evidence_type: e.evidence_type,
+    collected_by: e.collected_by,
+    collection_date: e.collection_date,
+    freshness_days: e.freshness_days?.toString(),
+    evidence_summary: e.evidence_summary,
+    reviewed_by: e.reviewed_by,
+    evidence_location: e.evidence_location,
+    confidence_score: e.confidence_score?.toString(),
+    status: e.status,
+    anomaly_marker: e.anomaly_marker || ''
+  }));
 
   const mapped = requirements.map(req => {
-    const matchingEvidence = evidenceList.filter(e => {
+    // First check if there's a specific DB upload for this requirement
+    const dbMatch = dbEvidenceFormatted.find(e =>
+      e.requirement_id === req.requirement_id
+    );
+
+    // If DB match found use it, otherwise fall back to CSV evidence
+    if (dbMatch) {
+      const status = determineStatus(dbMatch);
+      return {
+        ...req,
+        status,
+        evidence: dbMatch,
+        totalEvidence: 1
+      };
+    }
+
+    // Fall back to CSV evidence
+    const matchingEvidence = csvEvidence.filter(e => {
       if (!e.framework) return false;
       const fw = e.framework.toLowerCase().trim();
       return req.compliance_mapping.some(c =>
